@@ -13,7 +13,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from pathlib import Path
 import os
 from dotenv import load_dotenv
-import redis
+import redis.asyncio as redis
 
 load_dotenv()
 
@@ -47,9 +47,9 @@ INSTALLED_APPS = [
 ]
 
 
-REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+REDIS_HOST = os.getenv('REDIS_HOST', '127.0.0.1')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
-REDIS_DB = int(os.getenv('REDIS_DB_DEDUP', 0))
+REDIS_DB = int(os.getenv('REDIS_DB_DEDUP', 1))
 
 DEDUPLICATOR_TTL_SECONDS = int(os.getenv('DEDUPLICATOR_TTL_SECONDS', 60))
 
@@ -66,9 +66,14 @@ REDIS_INSTANCE = None
 EVENT_DEDUPLICATOR_INSTANCE = None
 
 try:
+    # <--- ИЗМЕНЕНИЕ: Создаем asyncio-клиент ---
     REDIS_INSTANCE = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
-    REDIS_INSTANCE.ping()
-    print(f"Успешное подключение к Redis: {REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}")
+    print(f"Экземпляр клиента Redis (asyncio) создан для {REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}")
+
+    # --- Проверку ping() перенесем в асинхронный контекст, если нужно, ---
+    # --- например, при старте приложения в asgi.py или в healthcheck эндпоинте ---
+
+    # Импортируем класс дедупликатора
     from deduplicator.logic import EventDeduplicator
 
     try:
@@ -77,26 +82,14 @@ try:
             ttl_seconds=DEDUPLICATOR_TTL_SECONDS,
             key_fields=DEDUPLICATOR_KEY_FIELDS
         )
-        print("Инстанс EventDeduplicator успешно создан.")
-    except ValueError as e:
-        print(f"Ошибка конфигурации EventDeduplicator: {e}")
-except redis.RedisError as e:
-    print(f"Ошибка подключения к Redis: {e}")
-    REDIS_INSTANCE = None
-
-# Создаем инстанс дедупликатора
-if REDIS_INSTANCE:
-    try:
-        EVENT_DEDUPLICATOR_INSTANCE = EventDeduplicator(
-            redis_client=REDIS_INSTANCE,
-            ttl_seconds=DEDUPLICATOR_TTL_SECONDS,
-            key_fields=DEDUPLICATOR_KEY_FIELDS
-        )
-        print("Инстанс EventDeduplicator успешно создан.")
+        print("Инстанс EventDeduplicator успешно создан (с asyncio Redis клиентом).")
     except ValueError as e:
          print(f"Ошибка конфигурации EventDeduplicator: {e}")
-         EVENT_DEDUPLICATOR_INSTANCE = None
-else:
+
+# --- ИЗМЕНЕНИЕ: Ловим и базовое исключение, если redis.asyncio не импортировался ---
+except (redis.RedisError, ImportError, Exception) as e:
+    print(f"Ошибка при настройке Redis или Deduplicator: {e}")
+    REDIS_INSTANCE = None
     EVENT_DEDUPLICATOR_INSTANCE = None
 
 MIDDLEWARE = [

@@ -13,7 +13,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from pathlib import Path
 import os
 from dotenv import load_dotenv
-import redis.asyncio as redis
+import redis as redis
 
 load_dotenv()
 
@@ -25,10 +25,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-3qe98w3b2dr%t@!7+u*)#t%2e5=rgudhj@-s79szo^ne=qxrj0'
+SECRET_KEY = os.getenv('SECRET_KEY')
+
+if not SECRET_KEY:
+    raise ValueError("Не установлена переменная окружения SECRET_KEY") # Важная проверка!
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DEBUG', '0') == '1'
 
 ALLOWED_HOSTS = []
 
@@ -51,7 +54,7 @@ REDIS_HOST = os.getenv('REDIS_HOST', '127.0.0.1')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_DB = int(os.getenv('REDIS_DB_DEDUP', 1))
 
-DEDUPLICATOR_TTL_SECONDS = int(os.getenv('DEDUPLICATOR_TTL_SECONDS', 60))
+DEDUPLICATOR_TTL_SECONDS = int(os.getenv('DEDUPLICATOR_TTL_SECONDS', 604800))
 
 DEDUPLICATOR_KEY_FIELDS = [
     'event_name',
@@ -66,12 +69,10 @@ REDIS_INSTANCE = None
 EVENT_DEDUPLICATOR_INSTANCE = None
 
 try:
-    # <--- ИЗМЕНЕНИЕ: Создаем asyncio-клиент ---
+    # <--- Создаем клиент ---
     REDIS_INSTANCE = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
-    print(f"Экземпляр клиента Redis (asyncio) создан для {REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}")
+    print(f"Экземпляр клиента Redis (синхронный) создан для {REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}")
 
-    # --- Проверку ping() перенесем в асинхронный контекст, если нужно, ---
-    # --- например, при старте приложения в asgi.py или в healthcheck эндпоинте ---
 
     # Импортируем класс дедупликатора
     from deduplicator.logic import EventDeduplicator
@@ -82,24 +83,24 @@ try:
             ttl_seconds=DEDUPLICATOR_TTL_SECONDS,
             key_fields=DEDUPLICATOR_KEY_FIELDS
         )
-        print("Инстанс EventDeduplicator успешно создан (с asyncio Redis клиентом).")
+        print("Инстанс EventDeduplicator успешно создан (с синхронный Redis клиентом).")
     except ValueError as e:
          print(f"Ошибка конфигурации EventDeduplicator: {e}")
 
-# --- ИЗМЕНЕНИЕ: Ловим и базовое исключение, если redis.asyncio не импортировался ---
+# --- Ловим и базовое исключение, если redis не импортировался ---
 except (redis.RedisError, ImportError, Exception) as e:
     print(f"Ошибка при настройке Redis или Deduplicator: {e}")
     REDIS_INSTANCE = None
     EVENT_DEDUPLICATOR_INSTANCE = None
 
 MIDDLEWARE = [
-    'django.middleware.security.SecurityMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware',
-    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+     'django.middleware.security.SecurityMiddleware',
+     'django.contrib.sessions.middleware.SessionMiddleware',
+     'django.middleware.common.CommonMiddleware',
+     'django.middleware.csrf.CsrfViewMiddleware',
+     'django.contrib.auth.middleware.AuthenticationMiddleware',
+     'django.contrib.messages.middleware.MessageMiddleware',
+     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
 ROOT_URLCONF = 'KN_practice.urls'
@@ -119,7 +120,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'KN_practice.wsgi.application'
+#WSGI_APPLICATION = 'KN_practice.wsgi.application'
 
 
 # Database
@@ -127,11 +128,17 @@ WSGI_APPLICATION = 'KN_practice.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('POSTGRES_DB', 'deduplicator_db'),
+        'USER': os.getenv('POSTGRES_USER', 'deduplicator_user'),
+        'PASSWORD': os.getenv('POSTGRES_PASSWORD'),
+        'HOST': os.getenv('POSTGRES_HOST', 'localhost'),
+        'PORT': os.getenv('POSTGRES_PORT', '5432'),
     }
 }
 
+if not DATABASES['default']['PASSWORD']:
+    raise ValueError("Не установлена переменная окружения POSTGRES_PASSWORD")
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
@@ -173,3 +180,13 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+CELERY_BROKER_URL = f'redis://{REDIS_HOST}:{REDIS_PORT}/1'
+CELERY_RESULT_BACKEND = f'redis://{REDIS_HOST}:{REDIS_PORT}/1'
+
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
+
+CELERY_RESULT_EXPIRES = 3600

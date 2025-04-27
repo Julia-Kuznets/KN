@@ -13,7 +13,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from pathlib import Path
 import os
 from dotenv import load_dotenv
-import redis
+import redis as redis
 
 load_dotenv()
 
@@ -25,12 +25,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-3qe98w3b2dr%t@!7+u*)#t%2e5=rgudhj@-s79szo^ne=qxrj0'
+SECRET_KEY = os.getenv('SECRET_KEY')
+
+if not SECRET_KEY:
+    raise ValueError("Не установлена переменная окружения SECRET_KEY") # Важная проверка!
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DEBUG', '0') == '1'
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = os.getenv('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost').split(',')
 
 
 # Application definition
@@ -47,11 +50,11 @@ INSTALLED_APPS = [
 ]
 
 
-REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+REDIS_HOST = os.getenv('REDIS_HOST', '127.0.0.1')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
-REDIS_DB = int(os.getenv('REDIS_DB_DEDUP', 0))
+REDIS_DB = int(os.getenv('REDIS_DB_DEDUP', 1))
 
-DEDUPLICATOR_TTL_SECONDS = int(os.getenv('DEDUPLICATOR_TTL_SECONDS', 60))
+DEDUPLICATOR_TTL_SECONDS = int(os.getenv('DEDUPLICATOR_TTL_SECONDS', 604800))
 
 DEDUPLICATOR_KEY_FIELDS = [
     'event_name',
@@ -66,9 +69,12 @@ REDIS_INSTANCE = None
 EVENT_DEDUPLICATOR_INSTANCE = None
 
 try:
+    # <--- Создаем клиент ---
     REDIS_INSTANCE = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
-    REDIS_INSTANCE.ping()
-    print(f"Успешное подключение к Redis: {REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}")
+    print(f"Экземпляр клиента Redis (синхронный) создан для {REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}")
+
+
+    # Импортируем класс дедупликатора
     from deduplicator.logic import EventDeduplicator
 
     try:
@@ -77,36 +83,24 @@ try:
             ttl_seconds=DEDUPLICATOR_TTL_SECONDS,
             key_fields=DEDUPLICATOR_KEY_FIELDS
         )
-        print("Инстанс EventDeduplicator успешно создан.")
-    except ValueError as e:
-        print(f"Ошибка конфигурации EventDeduplicator: {e}")
-except redis.RedisError as e:
-    print(f"Ошибка подключения к Redis: {e}")
-    REDIS_INSTANCE = None
-
-# Создаем инстанс дедупликатора
-if REDIS_INSTANCE:
-    try:
-        EVENT_DEDUPLICATOR_INSTANCE = EventDeduplicator(
-            redis_client=REDIS_INSTANCE,
-            ttl_seconds=DEDUPLICATOR_TTL_SECONDS,
-            key_fields=DEDUPLICATOR_KEY_FIELDS
-        )
-        print("Инстанс EventDeduplicator успешно создан.")
+        print("Инстанс EventDeduplicator успешно создан (с синхронный Redis клиентом).")
     except ValueError as e:
          print(f"Ошибка конфигурации EventDeduplicator: {e}")
-         EVENT_DEDUPLICATOR_INSTANCE = None
-else:
+
+# --- Ловим и базовое исключение, если redis не импортировался ---
+except (redis.RedisError, ImportError, Exception) as e:
+    print(f"Ошибка при настройке Redis или Deduplicator: {e}")
+    REDIS_INSTANCE = None
     EVENT_DEDUPLICATOR_INSTANCE = None
 
 MIDDLEWARE = [
-    'django.middleware.security.SecurityMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware',
-    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+     'django.middleware.security.SecurityMiddleware',
+     'django.contrib.sessions.middleware.SessionMiddleware',
+     'django.middleware.common.CommonMiddleware',
+     'django.middleware.csrf.CsrfViewMiddleware',
+     'django.contrib.auth.middleware.AuthenticationMiddleware',
+     'django.contrib.messages.middleware.MessageMiddleware',
+     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
 ROOT_URLCONF = 'KN_practice.urls'
@@ -126,7 +120,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'KN_practice.wsgi.application'
+#WSGI_APPLICATION = 'KN_practice.wsgi.application'
 
 
 # Database
@@ -134,11 +128,17 @@ WSGI_APPLICATION = 'KN_practice.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('POSTGRES_DB', 'deduplicator_db'),
+        'USER': os.getenv('POSTGRES_USER', 'deduplicator_user'),
+        'PASSWORD': os.getenv('POSTGRES_PASSWORD'),
+        'HOST': os.getenv('POSTGRES_HOST', 'localhost'),
+        'PORT': os.getenv('POSTGRES_PORT', '5432'),
     }
 }
 
+if not DATABASES['default']['PASSWORD']:
+    raise ValueError("Не установлена переменная окружения POSTGRES_PASSWORD")
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
@@ -180,3 +180,63 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+CELERY_BROKER_URL = f'redis://{REDIS_HOST}:{REDIS_PORT}/1'
+CELERY_RESULT_BACKEND = f'redis://{REDIS_HOST}:{REDIS_PORT}/1'
+
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
+
+CELERY_RESULT_EXPIRES = 3600
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False, # Не отключать существующие логгеры (Django, Celery)
+    'formatters': { # Определяем формат вывода логов
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': { # Определяем, куда выводить логи
+        'console': { # Вывод в консоль (stderr)
+            'level': 'DEBUG', # Выводить все сообщения от DEBUG и выше
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose', # Используем подробный формат
+        },
+    },
+    'loggers': { # Настраиваем конкретные логгеры
+        'django': { # Логгер самого Django
+            'handlers': ['console'],
+            'level': 'INFO', # Выводим INFO и выше от Django
+            'propagate': True,
+        },
+        'django.request': { # Логгер ошибок запросов Django
+            'handlers': ['console'],
+            'level': 'ERROR', # Выводим только ошибки запросов
+            'propagate': False,
+        },
+        'deduplicator': { # НАШ логгер (для приложения deduplicator)
+            'handlers': ['console'],
+            'level': 'DEBUG', # Выводим ВСЕ сообщения (DEBUG, INFO, WARNING, ERROR, CRITICAL) от нашего приложения
+            'propagate': False, # Не передавать сообщения выше по иерархии
+        },
+         # Можно добавить логгер для celery, если нужно видеть его логи в том же формате
+         # 'celery': {
+         #    'handlers': ['console'],
+         #    'level': 'INFO',
+         #    'propagate': True,
+         # },
+    },
+    # Корневой логгер (ловит все, что не поймали другие)
+    # 'root': {
+    #     'handlers': ['console'],
+    #     'level': 'WARNING',
+    # }
+}

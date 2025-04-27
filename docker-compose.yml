@@ -1,0 +1,79 @@
+
+
+services:
+  # --- Сервис PostgreSQL ---
+  postgres:
+    image: postgres:14-alpine
+    container_name: deduplicator_postgres
+    environment:
+      POSTGRES_USER: deduplicator_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: deduplicator_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+
+  # --- Сервис Redis ---
+  redis:
+    image: redis:6.2-alpine
+    container_name: deduplicator_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+        test: ["CMD", "redis-cli", "ping"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+
+# --- Сервис Приложения Django/Uvicorn ---
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: deduplicator_app
+    command: uvicorn KN_practice.asgi:application --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # --- Сервис Celery Воркера ---
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: deduplicator_worker
+    command: celery -A KN_practice worker -l INFO -P eventlet
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+
+volumes:
+  postgres_data:
+  redis_data:

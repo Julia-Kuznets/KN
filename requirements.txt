@@ -1,4 +1,8 @@
 django
 djangorestframework
+psycopg2-binary
 redis
 python-dotenv
+uvicorn
+celery[redis]
+eventlet

@@ -190,3 +190,53 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 
 CELERY_RESULT_EXPIRES = 3600
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False, # Не отключать существующие логгеры (Django, Celery)
+    'formatters': { # Определяем формат вывода логов
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': { # Определяем, куда выводить логи
+        'console': { # Вывод в консоль (stderr)
+            'level': 'DEBUG', # Выводить все сообщения от DEBUG и выше
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose', # Используем подробный формат
+        },
+    },
+    'loggers': { # Настраиваем конкретные логгеры
+        'django': { # Логгер самого Django
+            'handlers': ['console'],
+            'level': 'INFO', # Выводим INFO и выше от Django
+            'propagate': True,
+        },
+        'django.request': { # Логгер ошибок запросов Django
+            'handlers': ['console'],
+            'level': 'ERROR', # Выводим только ошибки запросов
+            'propagate': False,
+        },
+        'deduplicator': { # НАШ логгер (для приложения deduplicator)
+            'handlers': ['console'],
+            'level': 'DEBUG', # Выводим ВСЕ сообщения (DEBUG, INFO, WARNING, ERROR, CRITICAL) от нашего приложения
+            'propagate': False, # Не передавать сообщения выше по иерархии
+        },
+         # Можно добавить логгер для celery, если нужно видеть его логи в том же формате
+         # 'celery': {
+         #    'handlers': ['console'],
+         #    'level': 'INFO',
+         #    'propagate': True,
+         # },
+    },
+    # Корневой логгер (ловит все, что не поймали другие)
+    # 'root': {
+    #     'handlers': ['console'],
+    #     'level': 'WARNING',
+    # }
+}
